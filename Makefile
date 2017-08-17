@@ -5,3 +5,7 @@ sample: sample.cpp
 
 clean:
 	rm -f sample
+	rm -rf testdb
+
+db:
+	rm -rf testdb
