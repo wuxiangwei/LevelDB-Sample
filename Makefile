@@ -5,7 +5,7 @@ sample: sample.cpp
 
 clean:
 	rm -f sample
-	rm -rf testdb
+	rm -rf store.db
 
 db:
-	rm -rf testdb
+	rm -rf store.db

@@ -40,9 +40,9 @@ int main(int argc, char** argv)
     leveldb::Options options;
     options.create_if_missing = true;
 
-    leveldb::Status status = leveldb::DB::Open(options, "./testdb", &db);
+    leveldb::Status status = leveldb::DB::Open(options, "./store.db", &db);
     if (!status.ok()) {
-        std::cerr << "Unable to open/create test database './testdb'" << std::endl;
+        std::cerr << "Unable to open/create test database './store.db'" << std::endl;
         std::cerr << status.ToString() << std::endl;
         return -1;
     }
