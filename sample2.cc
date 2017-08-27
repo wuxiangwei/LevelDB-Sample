@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 
 #include "leveldb/db.h"
 #include "leveldb/write_batch.h"
@@ -27,12 +28,15 @@ std::mutex g_compact_mutex;
 std::condition_variable g_compact_cv;
 
 std::atomic<bool> g_stop_compact;
+std::atomic<bool> g_stop_write;
 std::mutex g_print_mutex;
 
 size_t g_max_entries;
 
+
 // called by main thread
 void init() {
+    g_stop_write = false;
     g_stop_compact = false;
     g_paxos_min = 50;
     g_paxos_trim_min = 250;
@@ -50,11 +54,6 @@ void init() {
 
 
 void deinit() {
-    if (g_db) {
-        delete g_db;
-        g_db = NULL;
-    }
-
     std::cout << "[Main] first_committed: " << g_first_committed 
         << " last_committed: " << g_last_committed << std::endl;
 
@@ -63,6 +62,22 @@ void deinit() {
         std::pair<KeyType, KeyType> e = g_compact_queue.front();
         std::cout << e.first << " ~ " << e.second << std::endl;
         g_compact_queue.pop();
+    }
+
+
+    if (g_db) {
+        delete g_db;
+        g_db = NULL;
+    }
+}
+
+
+void signal_handler(int signal) {
+    if (signal == SIGINT) {
+        std::cout << "SIGINT: prepare to exit ..." << std::endl;
+        std::cout << "===============================" << std::endl;
+        g_stop_write = true;
+        g_stop_compact = true;
     }
 }
 
@@ -87,10 +102,9 @@ char* get_value_by_index(uint64_t index=0) {
 }
 
 
-
 const size_t BATCH_SIZE = 4;
 void write_entry() {
-    for (uint64_t i=0; i<g_max_entries; i++) {
+    for (uint64_t i=0; i<g_max_entries && !g_stop_write; i++) {
         leveldb::WriteBatch bat;
         char *buffers[BATCH_SIZE]; 
         for (size_t j=0; j<BATCH_SIZE; j++) {
@@ -181,7 +195,8 @@ void compact_entry() {
 
 
 int main(int argc, char* argv[]) {
-    
+
+    std::signal(SIGINT, signal_handler);
     init();
 
     std::thread th1(write_entry);
