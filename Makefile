@@ -2,7 +2,7 @@
 all: sample2
 
 sample2: sample2.cc
-	g++ -o $@ $< -std=c++11 -lpthread
+	g++ -o $@ $< -std=c++11 -lpthread -lleveldb -lsnappy
 
 sample: sample.cpp
 	g++ -o $@ $<  -lleveldb -lpthread -lsnappy
