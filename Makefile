@@ -8,7 +8,7 @@ sample: sample.cpp
 	g++ -o $@ $<  -lleveldb -lpthread -lsnappy
 
 clean:
-	rm -f sample sample2
+	rm -f sample sample2 
 	rm -rf store.db
 
 db:
