@@ -35,7 +35,7 @@ std::atomic<bool> g_stop_snapshot;
 std::mutex g_print_mutex;
 
 size_t g_max_entries;
-
+size_t g_small_count;
 
 // called by main thread
 void init() {
@@ -48,6 +48,7 @@ void init() {
     g_first_committed = g_last_committed = 0;
     
     g_max_entries = 100000000; // g_max_entries * BATCH_SIZE
+    g_small_count = 0;
 
     // Open leveldb
     leveldb::Options opt;
@@ -98,18 +99,24 @@ void signal_handler(int signal) {
 
 
 std::string get_key_by_index(uint64_t index) {
-    std::ostringstream key;
-    key << "paxos_" << index;
+    std::string out("paxos");
+    out.push_back(0);
 
-    return key.str();
+    char buf[100];
+    snprintf(buf, sizeof(buf), "%08d", index);
+
+    out.append(buf);
+
+    return out;
 }
 
 
 const size_t VALUE_SIZE = 2 * 1024 * 1024; // 2MB
-char* get_value_by_index(uint64_t index=0) {
+char* get_value_by_index(uint64_t index=0, bool big=true) {
     char *buffer = new char[VALUE_SIZE];
+    size_t value_sz = big ? VALUE_SIZE: 1024;
 
-    for (size_t i=0; i<VALUE_SIZE; i++) {
+    for (size_t i=0; i<value_sz; i++) {
         buffer[i] = 'x';
     }
 
@@ -118,21 +125,23 @@ char* get_value_by_index(uint64_t index=0) {
 
 
 const size_t BATCH_SIZE = 4;
+const size_t MAX_SMALL_COUNT = 100;
+
 void write_entry() {
-    // for (uint64_t i=100000000; i<(100000000 + g_max_entries) && !g_stop_write; i++) {
     for (uint64_t i=0; i<g_max_entries && !g_stop_write; i++) {
         leveldb::WriteBatch bat;
         char *buffers[BATCH_SIZE]; 
         for (size_t j=0; j<BATCH_SIZE; j++) {
             uint64_t key_ind = i * BATCH_SIZE + j;
             KeyType key = get_key_by_index(key_ind);
-            buffers[j] = get_value_by_index(i*BATCH_SIZE+j);
+            buffers[j] = get_value_by_index(i*BATCH_SIZE+j, g_small_count > MAX_SMALL_COUNT);
             bat.Delete(leveldb::Slice(key));
             bat.Put(leveldb::Slice(key), leveldb::Slice(buffers[j]));
+            g_small_count++;
         }
-
         // add new entry
         g_last_committed += BATCH_SIZE;
+        g_db->Write(leveldb::WriteOptions(), &bat);
 
         // check trim
         if (g_first_committed + g_paxos_min + g_paxos_trim_min < g_last_committed) {
@@ -145,6 +154,7 @@ void write_entry() {
             KeyType be_key = g_first_committed > 0 ? get_key_by_index(g_first_committed-1): get_key_by_index(g_first_committed);
             KeyType ed_key = get_key_by_index(ed_key_index);
 
+            bat.Clear();
             for (size_t k=g_first_committed; k<ed_key_index; k++) {
                 KeyType delete_key = get_key_by_index(k);
                 bat.Delete(leveldb::Slice(delete_key));
@@ -158,9 +168,7 @@ void write_entry() {
             g_compact_cv.notify_all();
 
             g_first_committed += trim_num;
-        } else {
-            // Write entries to db
-            g_db->Write(leveldb::WriteOptions(), &bat);
+            g_small_count = 0;
         }
 
         if (0) {
@@ -175,7 +183,7 @@ void write_entry() {
             delete[] buffers[j];
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000)); 
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
     }
 }
 
@@ -203,29 +211,17 @@ void compact_entry() {
         if (!(e.first == "" && e.second == "")) {
             leveldb::Slice slc_begin(e.first);
             leveldb::Slice slc_end(e.second);
+            leveldb::Range range(slc_begin, slc_end);
+            uint64_t before_size, after_size;
+            
+            g_db->GetApproximateSizes(&range, 1, &before_size);
             g_db->CompactRange(&slc_begin, &slc_end);
+            g_db->GetApproximateSizes(&range, 1, &after_size);
 
             std::unique_lock<std::mutex> loc(g_print_mutex);
             std::cout << "[Compact] compacting " << e.first << " ~ " << e.second << std::endl;
+            std::cout << "[Compact] size change: " << before_size << " => " << after_size << std::endl;
         }
-    }
-}
-
-
-void snapshot_entry() {
-    while (!g_stop_snapshot) {
-        // const leveldb::Snapshot *snapshot = NULL;
-        // {
-        //     std::unique_lock<std::mutex> print_lock(g_print_mutex);
-        //     std::cout << "[Snapshot] " << "Create snapshot ..." << std::endl;
-        // }
-        // snapshot = g_db->GetSnapshot();
-        std::this_thread::sleep_for(std::chrono::seconds(10)); 
-        // g_db->ReleaseSnapshot(snapshot);
-        // {
-        //     std::unique_lock<std::mutex> print_lock(g_print_mutex);
-        //     std::cout << "[Snapshot] " << "Destroy snapshot ..." << std::endl;
-        // }
     }
 }
 
@@ -237,14 +233,10 @@ int main(int argc, char* argv[]) {
 
     std::thread th1(write_entry);
     std::thread th2(compact_entry);
-    // std::thread th3(snapshot_entry);
 
     th1.join();
     g_stop_compact = true;
     th2.join();
-    // g_stop_snapshot = true;
-    // th3.join();
-    
 
     deinit();
 
